@@ -12,6 +12,7 @@
  */
 
 #include <SPI.h>
+#include <SD.h>
 #include "esp_sleep.h"
 #include "driver/gpio.h"
 
@@ -21,6 +22,7 @@
 #define LORA_MOSI   6
 #define LORA_CS     21
 #define LORA_DIO0   8   // Interruption RX/TX Done
+#define SD_CS       7   // Chip Select carte SD
 
 // Registres SX1278
 #define REG_FIFO                 0x00
@@ -82,6 +84,7 @@
 
 // Variables globales
 uint32_t currentFrequency = 433000000; // Fréquence par défaut 433MHz
+bool sdOk = false;
 
 // Buffers
 #define MAX_PKT_LENGTH 255
@@ -109,6 +112,7 @@ int16_t packetRssi();
 float packetSnr();
 void printStatus();
 void enterDeepSleep();
+void logToSD(const uint8_t* data, uint8_t len, int16_t rssi, float snr);
 
 void setup() {
   Serial.begin(115200);
@@ -123,9 +127,11 @@ void setup() {
   
   // Configuration des broches
   pinMode(LORA_CS, OUTPUT);
+  pinMode(SD_CS, OUTPUT);
   pinMode(LORA_DIO0, INPUT);
-  
+
   digitalWrite(LORA_CS, HIGH);
+  digitalWrite(SD_CS, HIGH);
   
   // Réinitialisation du module
   if (!begin()) {
@@ -135,6 +141,16 @@ void setup() {
   
   Serial.println("Module LoRa initialisé avec succès!");
   Serial.printf("Fréquence: %lu Hz\n", currentFrequency);
+
+  // Initialisation carte SD (même bus SPI, CS différent)
+  if (SD.begin(SD_CS, SPI, 4000000)) {
+    sdOk = true;
+    Serial.println("Carte SD initialisée.");
+  } else {
+    Serial.println("Carte SD absente ou erreur.");
+  }
+  SPI.setFrequency(8000000);
+
   Serial.println("\nCommandes disponibles:");
   Serial.println("  SEND:votre_message  - Envoyer un message");
   Serial.println("  FREQ:433000000      - Changer fréquence (Hz)");
@@ -227,6 +243,9 @@ void loop() {
         }
       }
       Serial.println("\n-------------------\n");
+
+      // Enregistrer sur carte SD
+      logToSD(rxBuffer, rxLength, packetRssi(), packetSnr());
     }
 
     // Retour en réception immédiatement
@@ -499,6 +518,32 @@ void printStatus() {
   int16_t rssi = readRegister(REG_RSSI_VALUE) - 164;
   Serial.printf("RSSI: %d dBm\n", rssi);
   Serial.println("===========================\n");
+}
+
+void logToSD(const uint8_t* data, uint8_t len, int16_t rssi, float snr) {
+  if (!sdOk) return;
+
+  File f = SD.open("/recu.txt", FILE_APPEND);
+  if (!f) {
+    Serial.println("SD: erreur ouverture recu.txt");
+    return;
+  }
+
+  f.printf("RSSI:%d SNR:%.2f | ", rssi, snr);
+  for (uint8_t i = 0; i < len; i++) {
+    if (data[i] >= 32 && data[i] <= 126) {
+      f.print((char)data[i]);
+    } else {
+      f.printf("[0x%02X]", data[i]);
+    }
+  }
+  f.println();
+  f.close();
+
+  // Restaurer fréquence SPI pour le LoRa
+  SPI.setFrequency(8000000);
+
+  Serial.println("SD: message enregistré");
 }
 
 void enterDeepSleep() {
