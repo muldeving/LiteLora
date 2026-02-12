@@ -20,8 +20,7 @@
 #define LORA_MISO   5
 #define LORA_MOSI   6
 #define LORA_CS     21
-#define LORA_RST    8
-#define LORA_DIO0   10  // Interruption RX/TX Done
+#define LORA_DIO0   8   // Interruption RX/TX Done
 
 // Registres SX1278
 #define REG_FIFO                 0x00
@@ -127,7 +126,6 @@ void setup() {
   
   // Configuration des broches
   pinMode(LORA_CS, OUTPUT);
-  pinMode(LORA_RST, OUTPUT);
   pinMode(LORA_DIO0, INPUT);
   
   digitalWrite(LORA_CS, HIGH);
@@ -323,9 +321,11 @@ bool begin() {
 }
 
 void reset() {
-  digitalWrite(LORA_RST, LOW);
+  // Pas de reset matériel (RST non connecté)
+  // Reset logiciel : forcer le passage par le mode sleep
+  writeRegister(REG_OP_MODE, 0x00);  // FSK sleep
   delay(10);
-  digitalWrite(LORA_RST, HIGH);
+  writeRegister(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_SLEEP);  // LoRa sleep
   delay(10);
 }
 
