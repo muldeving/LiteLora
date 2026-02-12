@@ -14,6 +14,8 @@
 
 #include <LiteLora.h>
 #include <SD.h>
+#include "esp_sleep.h"
+#include "driver/gpio.h"
 
 // Broche chip-select de la carte SD (même bus SPI que le LoRa)
 #define SD_CS 7
@@ -133,7 +135,11 @@ void loop() {
     else if (cmd == "SLEEP") {
       Serial.println("Entrée en deep sleep...");
       Serial.flush();
-      lora.enterDeepSleep(1);
+      lora.receive();
+      delay(100);
+      esp_deep_sleep_enable_gpio_wakeup(1 << 1, ESP_GPIO_WAKEUP_GPIO_HIGH);
+      gpio_set_direction((gpio_num_t)1, GPIO_MODE_INPUT);
+      esp_deep_sleep_start();
     }
     else if (cmd == "RSSI") {
       Serial.printf("RSSI actuel: %d dBm\n", lora.currentRssi());
