@@ -114,11 +114,12 @@ Initialise le bus SPI, vérifie la présence du SX1278 (version `0x12`), appliqu
 
 ### Contrôle de mode
 
-| Méthode                             | Description                                        |
-|--------------------------------------|----------------------------------------------------|
-| `sleep()`                            | Mode sleep basse consommation                      |
-| `standby()`                          | Mode standby                                       |
-| `enterDeepSleep(uint8_t wakeupPin)`  | Deep sleep ESP32, réveil par GPIO `wakeupPin`      |
+| Méthode      | Description                   |
+|--------------|-------------------------------|
+| `sleep()`    | Mode sleep basse consommation |
+| `standby()`  | Mode standby                  |
+
+> **Note :** Le deep sleep ESP32 (`esp_deep_sleep_start()`) n'est pas géré par la bibliothèque car il concerne le microcontrôleur, pas le module LoRa. Appelez `lora.receive()` pour mettre le LoRa en réception avant d'entrer en deep sleep dans votre code applicatif.
 
 ### Configuration radio (modifiable à chaud)
 

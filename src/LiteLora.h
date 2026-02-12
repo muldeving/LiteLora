@@ -9,7 +9,6 @@
  *  - Configuration complète (fréquence, SF, BW, CR, puissance, etc.)
  *  - Transmission et réception par polling (pas d'interruption matérielle)
  *  - Gestion du partage du bus SPI avec une carte SD
- *  - Mode deep sleep avec réveil GPIO
  *
  * Licence : MIT
  */
@@ -110,8 +109,8 @@ struct LiteLoraConfig {
  * Classe principale de la bibliothèque LiteLora.
  *
  * Gère un module SX1278 via SPI, incluant l'initialisation,
- * la configuration radio, l'émission, la réception et le contrôle
- * d'alimentation. Gère également le partage du bus SPI avec un
+ * la configuration radio, l'émission et la réception.
+ * Gère également le partage du bus SPI avec un
  * périphérique SD (chip-select séparé).
  */
 class LiteLora {
@@ -141,13 +140,6 @@ public:
 
   /** Passe le module en mode standby. */
   void standby();
-
-  /**
-   * Entre en deep sleep ESP32 avec réveil par GPIO.
-   *
-   * @param wakeupPin  Numéro de GPIO utilisé pour le réveil.
-   */
-  void enterDeepSleep(uint8_t wakeupPin);
 
   // ---- Configuration radio (modifiable à chaud) ----
 

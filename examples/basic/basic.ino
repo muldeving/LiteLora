@@ -14,6 +14,8 @@
 
 #include <LiteLora.h>
 #include <SD.h>
+#include "esp_sleep.h"
+#include "driver/gpio.h"
 
 // Broche chip-select de la carte SD (même bus SPI que le LoRa)
 #define SD_CS 7
@@ -37,7 +39,7 @@ void logToSD(const uint8_t* data, uint8_t len, int16_t rssi, float snr) {
 
   f.printf("RSSI:%d SNR:%.2f | ", rssi, snr);
   for (uint8_t i = 0; i < len; i++) {
-    if (data[i] >= 32 && data[i] <= 126) {
+    if ((data[i] >= 32 && data[i] <= 126) || data[i] >= 0x80) {
       f.print((char)data[i]);
     } else {
       f.printf("[0x%02X]", data[i]);
@@ -133,7 +135,11 @@ void loop() {
     else if (cmd == "SLEEP") {
       Serial.println("Entrée en deep sleep...");
       Serial.flush();
-      lora.enterDeepSleep(1);
+      lora.receive();
+      delay(100);
+      esp_deep_sleep_enable_gpio_wakeup(1 << 1, ESP_GPIO_WAKEUP_GPIO_HIGH);
+      gpio_set_direction((gpio_num_t)1, GPIO_MODE_INPUT);
+      esp_deep_sleep_start();
     }
     else if (cmd == "RSSI") {
       Serial.printf("RSSI actuel: %d dBm\n", lora.currentRssi());
@@ -165,7 +171,7 @@ void loop() {
       Serial.print("Données: ");
 
       for (uint8_t i = 0; i < len; i++) {
-        if (buffer[i] >= 32 && buffer[i] <= 126) {
+        if ((buffer[i] >= 32 && buffer[i] <= 126) || buffer[i] >= 0x80) {
           Serial.print((char)buffer[i]);
         } else {
           Serial.printf("[0x%02X]", buffer[i]);

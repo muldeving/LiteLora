@@ -3,8 +3,6 @@
  */
 
 #include "LiteLora.h"
-#include "esp_sleep.h"
-#include "driver/gpio.h"
 
 // ========== Constructeur ==========
 
@@ -143,15 +141,6 @@ void LiteLora::sleep() {
 
 void LiteLora::standby() {
   writeRegister(LORA_REG_OP_MODE, LORA_MODE_LONG_RANGE | LORA_MODE_STDBY);
-}
-
-void LiteLora::enterDeepSleep(uint8_t wakeupPin) {
-  receive();
-  delay(100);
-
-  esp_deep_sleep_enable_gpio_wakeup(1 << wakeupPin, ESP_GPIO_WAKEUP_GPIO_HIGH);
-  gpio_set_direction((gpio_num_t)wakeupPin, GPIO_MODE_INPUT);
-  esp_deep_sleep_start();
 }
 
 // ========== Configuration radio ==========
