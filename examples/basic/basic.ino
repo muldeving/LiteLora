@@ -39,7 +39,7 @@ void logToSD(const uint8_t* data, uint8_t len, int16_t rssi, float snr) {
 
   f.printf("RSSI:%d SNR:%.2f | ", rssi, snr);
   for (uint8_t i = 0; i < len; i++) {
-    if (data[i] >= 32 && data[i] <= 126) {
+    if ((data[i] >= 32 && data[i] <= 126) || data[i] >= 0x80) {
       f.print((char)data[i]);
     } else {
       f.printf("[0x%02X]", data[i]);
@@ -171,7 +171,7 @@ void loop() {
       Serial.print("Données: ");
 
       for (uint8_t i = 0; i < len; i++) {
-        if (buffer[i] >= 32 && buffer[i] <= 126) {
+        if ((buffer[i] >= 32 && buffer[i] <= 126) || buffer[i] >= 0x80) {
           Serial.print((char)buffer[i]);
         } else {
           Serial.printf("[0x%02X]", buffer[i]);
