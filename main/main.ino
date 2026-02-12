@@ -21,8 +21,7 @@
 #define LORA_MOSI   6
 #define LORA_CS     21
 #define LORA_RST    8
-#define LORA_DIO0   8   // Interruption RX
-#define LORA_DIO1   10  // Interruption TX (optionnel)
+#define LORA_DIO0   10  // Interruption RX/TX Done
 
 // Registres SX1278
 #define REG_FIFO                 0x00
@@ -83,8 +82,7 @@
 #define LORA_SYNC_WORD      0x12     // Réseau privé
 
 // Variables globales
-volatile bool rxDone = false;
-volatile bool txDone = false;
+volatile bool dio0Fired = false;
 uint32_t currentFrequency = 433000000; // Fréquence par défaut 433MHz
 
 // Buffers
@@ -169,20 +167,22 @@ void loop() {
       
       uint32_t startTime = micros();
       transmit((uint8_t*)msg.c_str(), msg.length());
-      
-      // Attendre fin de transmission
-      while (!txDone && (micros() - startTime < 5000000)) {
+
+      // Attendre fin de transmission (polling registre IRQ)
+      while (!(readRegister(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK)) {
+        if (micros() - startTime > 5000000) break;
         delay(1);
       }
-      
-      if (txDone) {
+
+      if (readRegister(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK) {
         uint32_t duration = micros() - startTime;
+        writeRegister(REG_IRQ_FLAGS, 0xFF);
+        dio0Fired = false;
         Serial.printf("✓ Envoyé en %lu µs\n", duration);
-        txDone = false;
       } else {
         Serial.println("✗ Timeout transmission");
       }
-      
+
       // Retour en réception
       receive();
     }
@@ -215,50 +215,46 @@ void loop() {
   }
   
   // Vérifier réception de paquets
-  if (rxDone) {
-    rxDone = false;
-    
-    uint32_t startTime = micros();
-    readPacket();
-    uint32_t readTime = micros() - startTime;
-    
-    if (rxLength > 0) {
-      Serial.println("\n--- Paquet reçu ---");
-      Serial.printf("Longueur: %d octets\n", rxLength);
-      Serial.printf("RSSI: %d dBm\n", packetRssi());
-      Serial.printf("SNR: %.2f dB\n", packetSnr());
-      Serial.printf("Temps lecture: %lu µs\n", readTime);
-      Serial.print("Données: ");
-      
-      for (int i = 0; i < rxLength; i++) {
-        if (rxBuffer[i] >= 32 && rxBuffer[i] <= 126) {
-          Serial.print((char)rxBuffer[i]);
-        } else {
-          Serial.printf("[0x%02X]", rxBuffer[i]);
+  if (dio0Fired) {
+    dio0Fired = false;
+
+    uint8_t irqFlags = readRegister(REG_IRQ_FLAGS);
+
+    if (irqFlags & IRQ_RX_DONE_MASK) {
+      uint32_t startTime = micros();
+      readPacket();
+      uint32_t readTime = micros() - startTime;
+
+      if (rxLength > 0) {
+        Serial.println("\n--- Paquet reçu ---");
+        Serial.printf("Longueur: %d octets\n", rxLength);
+        Serial.printf("RSSI: %d dBm\n", packetRssi());
+        Serial.printf("SNR: %.2f dB\n", packetSnr());
+        Serial.printf("Temps lecture: %lu µs\n", readTime);
+        Serial.print("Données: ");
+
+        for (int i = 0; i < rxLength; i++) {
+          if (rxBuffer[i] >= 32 && rxBuffer[i] <= 126) {
+            Serial.print((char)rxBuffer[i]);
+          } else {
+            Serial.printf("[0x%02X]", rxBuffer[i]);
+          }
         }
+        Serial.println("\n-------------------\n");
       }
-      Serial.println("\n-------------------\n");
+
+      // Retour en réception immédiatement
+      receive();
+    } else {
+      // Effacer flags non-RX
+      writeRegister(REG_IRQ_FLAGS, 0xFF);
     }
-    
-    // Retour en réception immédiatement
-    receive();
   }
 }
 
 // ========== Interruption ==========
 void IRAM_ATTR onDio0Rise() {
-  uint8_t irqFlags = readRegister(REG_IRQ_FLAGS);
-  
-  if (irqFlags & IRQ_RX_DONE_MASK) {
-    rxDone = true;
-  }
-  
-  if (irqFlags & IRQ_TX_DONE_MASK) {
-    txDone = true;
-  }
-  
-  // Effacer les flags
-  writeRegister(REG_IRQ_FLAGS, 0xFF);
+  dio0Fired = true;
 }
 
 // ========== Fonctions SPI ==========
