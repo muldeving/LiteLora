@@ -12,6 +12,7 @@
  */
 
 #include <SPI.h>
+#include <SD.h>
 #include "esp_sleep.h"
 #include "driver/gpio.h"
 
@@ -20,9 +21,8 @@
 #define LORA_MISO   5
 #define LORA_MOSI   6
 #define LORA_CS     21
-#define LORA_RST    8
-#define LORA_DIO0   8   // Interruption RX
-#define LORA_DIO1   10  // Interruption TX (optionnel)
+#define LORA_DIO0   8   // Interruption RX/TX Done
+#define SD_CS       7   // Chip Select carte SD
 
 // Registres SX1278
 #define REG_FIFO                 0x00
@@ -83,9 +83,8 @@
 #define LORA_SYNC_WORD      0x12     // Réseau privé
 
 // Variables globales
-volatile bool rxDone = false;
-volatile bool txDone = false;
 uint32_t currentFrequency = 433000000; // Fréquence par défaut 433MHz
+bool sdOk = false;
 
 // Buffers
 #define MAX_PKT_LENGTH 255
@@ -93,7 +92,6 @@ uint8_t rxBuffer[MAX_PKT_LENGTH];
 uint8_t rxLength = 0;
 
 // Prototypes
-void IRAM_ATTR onDio0Rise();
 uint8_t readRegister(uint8_t address);
 void writeRegister(uint8_t address, uint8_t value);
 void setFrequency(uint32_t frequency);
@@ -109,12 +107,12 @@ void sleep();
 void standby();
 void transmit(uint8_t* data, uint8_t length);
 void receive();
-bool available();
 void readPacket();
 int16_t packetRssi();
 float packetSnr();
 void printStatus();
 void enterDeepSleep();
+void logToSD(const uint8_t* data, uint8_t len, int16_t rssi, float snr);
 
 void setup() {
   Serial.begin(115200);
@@ -129,10 +127,11 @@ void setup() {
   
   // Configuration des broches
   pinMode(LORA_CS, OUTPUT);
-  pinMode(LORA_RST, OUTPUT);
+  pinMode(SD_CS, OUTPUT);
   pinMode(LORA_DIO0, INPUT);
-  
+
   digitalWrite(LORA_CS, HIGH);
+  digitalWrite(SD_CS, HIGH);
   
   // Réinitialisation du module
   if (!begin()) {
@@ -142,6 +141,16 @@ void setup() {
   
   Serial.println("Module LoRa initialisé avec succès!");
   Serial.printf("Fréquence: %lu Hz\n", currentFrequency);
+
+  // Initialisation carte SD (même bus SPI, CS différent)
+  if (SD.begin(SD_CS, SPI, 4000000)) {
+    sdOk = true;
+    Serial.println("Carte SD initialisée.");
+  } else {
+    Serial.println("Carte SD absente ou erreur.");
+  }
+  SPI.setFrequency(8000000);
+
   Serial.println("\nCommandes disponibles:");
   Serial.println("  SEND:votre_message  - Envoyer un message");
   Serial.println("  FREQ:433000000      - Changer fréquence (Hz)");
@@ -149,10 +158,7 @@ void setup() {
   Serial.println("  RSSI                - Afficher RSSI");
   Serial.println("  STATUS              - Afficher état");
   Serial.println("\nEn attente de messages...\n");
-  
-  // Configurer interruption DIO0
-  attachInterrupt(digitalPinToInterrupt(LORA_DIO0), onDio0Rise, RISING);
-  
+
   // Passer en mode réception
   receive();
 }
@@ -169,20 +175,21 @@ void loop() {
       
       uint32_t startTime = micros();
       transmit((uint8_t*)msg.c_str(), msg.length());
-      
-      // Attendre fin de transmission
-      while (!txDone && (micros() - startTime < 5000000)) {
+
+      // Attendre fin de transmission (polling registre IRQ)
+      while (!(readRegister(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK)) {
+        if (micros() - startTime > 5000000) break;
         delay(1);
       }
-      
-      if (txDone) {
+
+      if (readRegister(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK) {
         uint32_t duration = micros() - startTime;
+        writeRegister(REG_IRQ_FLAGS, 0xFF);
         Serial.printf("✓ Envoyé en %lu µs\n", duration);
-        txDone = false;
       } else {
         Serial.println("✗ Timeout transmission");
       }
-      
+
       // Retour en réception
       receive();
     }
@@ -214,14 +221,12 @@ void loop() {
     }
   }
   
-  // Vérifier réception de paquets
-  if (rxDone) {
-    rxDone = false;
-    
+  // Vérifier réception de paquets (polling registre IRQ)
+  if (readRegister(REG_IRQ_FLAGS) & IRQ_RX_DONE_MASK) {
     uint32_t startTime = micros();
     readPacket();
     uint32_t readTime = micros() - startTime;
-    
+
     if (rxLength > 0) {
       Serial.println("\n--- Paquet reçu ---");
       Serial.printf("Longueur: %d octets\n", rxLength);
@@ -229,7 +234,7 @@ void loop() {
       Serial.printf("SNR: %.2f dB\n", packetSnr());
       Serial.printf("Temps lecture: %lu µs\n", readTime);
       Serial.print("Données: ");
-      
+
       for (int i = 0; i < rxLength; i++) {
         if (rxBuffer[i] >= 32 && rxBuffer[i] <= 126) {
           Serial.print((char)rxBuffer[i]);
@@ -238,27 +243,14 @@ void loop() {
         }
       }
       Serial.println("\n-------------------\n");
+
+      // Enregistrer sur carte SD
+      logToSD(rxBuffer, rxLength, packetRssi(), packetSnr());
     }
-    
+
     // Retour en réception immédiatement
     receive();
   }
-}
-
-// ========== Interruption ==========
-void IRAM_ATTR onDio0Rise() {
-  uint8_t irqFlags = readRegister(REG_IRQ_FLAGS);
-  
-  if (irqFlags & IRQ_RX_DONE_MASK) {
-    rxDone = true;
-  }
-  
-  if (irqFlags & IRQ_TX_DONE_MASK) {
-    txDone = true;
-  }
-  
-  // Effacer les flags
-  writeRegister(REG_IRQ_FLAGS, 0xFF);
 }
 
 // ========== Fonctions SPI ==========
@@ -327,9 +319,11 @@ bool begin() {
 }
 
 void reset() {
-  digitalWrite(LORA_RST, LOW);
+  // Pas de reset matériel (RST non connecté)
+  // Reset logiciel : forcer le passage par le mode sleep
+  writeRegister(REG_OP_MODE, 0x00);  // FSK sleep
   delay(10);
-  digitalWrite(LORA_RST, HIGH);
+  writeRegister(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_SLEEP);  // LoRa sleep
   delay(10);
 }
 
@@ -524,6 +518,32 @@ void printStatus() {
   int16_t rssi = readRegister(REG_RSSI_VALUE) - 164;
   Serial.printf("RSSI: %d dBm\n", rssi);
   Serial.println("===========================\n");
+}
+
+void logToSD(const uint8_t* data, uint8_t len, int16_t rssi, float snr) {
+  if (!sdOk) return;
+
+  File f = SD.open("/recu.txt", FILE_APPEND);
+  if (!f) {
+    Serial.println("SD: erreur ouverture recu.txt");
+    return;
+  }
+
+  f.printf("RSSI:%d SNR:%.2f | ", rssi, snr);
+  for (uint8_t i = 0; i < len; i++) {
+    if (data[i] >= 32 && data[i] <= 126) {
+      f.print((char)data[i]);
+    } else {
+      f.printf("[0x%02X]", data[i]);
+    }
+  }
+  f.println();
+  f.close();
+
+  // Restaurer fréquence SPI pour le LoRa
+  SPI.setFrequency(8000000);
+
+  Serial.println("SD: message enregistré");
 }
 
 void enterDeepSleep() {
